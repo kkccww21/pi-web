@@ -1,5 +1,5 @@
 # Pi Web - Development Notes
-
+这是一个fork的git，改动务必符合开闭原则，因为主干的新功能需要不定期merge到当前fork分支
 ## Quick Start
 
 ```bash
