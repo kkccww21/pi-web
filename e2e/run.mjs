@@ -9,6 +9,8 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { checkExtensionDialogs, extensionSource } from "./extension-dialog.mjs";
+import { checkChatAppearance } from "./chat-appearance.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const mode = process.env.E2E_SERVER_MODE || "dev";
@@ -25,6 +27,7 @@ const timestamp = "2026-08-23T00:00:00.000Z";
 const LONG = "e2e-long-session";
 const BRANCH = "e2e-branch-session";
 const RICH = "e2e-rich-session";
+const COMPACTED = "e2e-compacted-session";
 const text = (i) => `E2E message ${String(i).padStart(4, "0")}`;
 const ids = (start, end) => Array.from({ length: end - start }, (_, i) => `e${start + i}`);
 
@@ -55,8 +58,12 @@ process.once("SIGTERM", interrupt);
 
 try {
   // Seed before startup so the first catalogue scan sees every fixture.
-  writeSession(LONG, Array.from({ length: 5000 }, (_, i) =>
-    message(`e${i}`, i ? `e${i - 1}` : null, i % 2 ? "assistant" : "user", text(i))));
+  mkdirSync(join(agentDir, "extensions"));
+  writeFileSync(join(agentDir, "extensions", "e2e-dialog.js"), extensionSource);
+  const longEntries = Array.from({ length: 5000 }, (_, i) =>
+    message(`e${i}`, i ? `e${i - 1}` : null, i % 2 ? "assistant" : "user", text(i)));
+  longEntries.splice(1, 0, message("alternate", "e0", "user", "E2E alternate history branch"));
+  writeSession(LONG, longEntries);
   writeSession(BRANCH, [
     message("root", null, "user", "Branch root"),
     message("old", "root", "assistant", "Inactive branch answer"),
@@ -64,12 +71,49 @@ try {
   ]);
   const toolResult = message("result", "call", "toolResult", [{ type: "text", text: "E2E tool output" }]);
   Object.assign(toolResult.message, { toolCallId: "t1", toolName: "bash", isError: false });
-  writeSession(RICH, [
+  const richEntries = [
     message("user", null, "user", "Render **E2E markdown**"),
-    message("call", "user", "assistant", [{ type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo E2E tool output" } }]),
+    message("call", "user", "assistant", [
+      { type: "thinking", thinking: "" },
+      { type: "thinking", thinking: "E2E intermediate reasoning\nIntermediate thinking details." },
+      { type: "text", text: "E2E process paragraph.\n\n".repeat(20) },
+      { type: "toolCall", id: "t1", name: "bash", arguments: { command: "echo E2E tool output" } },
+    ]),
     toolResult,
-    message("answer", "result", "assistant", [{ type: "text", text: "E2E final answer\n```js\nconsole.log('E2E code');\n```" }]),
-  ]);
+    message("answer", "result", "assistant", [
+      { type: "thinking", thinking: "" },
+      { type: "thinking", thinking: "E2E follow-up reasoning\nFollow-up thinking details." },
+      { type: "text", text: "E2E process note" },
+      { type: "thinking", thinking: "E2E final reasoning\nFinal thinking details." },
+      { type: "text", text:
+        "E2E final answer\n```js\nconsole.log('E2E code');\n```\n\n"
+        + "E2E answer paragraph.\n\n".repeat(20)
+        + "## E2E reading position\n\n"
+        + "E2E answer paragraph.\n\n".repeat(20),
+      },
+    ]),
+  ];
+  Object.assign(richEntries.at(-1).message, { provider: "test", model: "E2E Model" });
+  writeSession(RICH, richEntries);
+  // The default 50-entry page starts at compaction, with its user prompt outside it.
+  const compactedEntries = [
+    message("user", null, "user", "E2E prompt outside the compacted page"),
+    { type: "compaction", id: "compact", parentId: "user", timestamp, summary: "E2E compaction anchor", firstKeptEntryId: "user", tokensBefore: 100 },
+  ];
+  for (let i = 0; i < 24; i++) {
+    compactedEntries.push(message(`call${i}`, compactedEntries.at(-1).id, "assistant", [
+      { type: "toolCall", id: `t${i}`, name: "bash", arguments: { command: `echo step${i}` } },
+    ]));
+    const result = message(`result${i}`, `call${i}`, "toolResult", [{ type: "text", text: `step${i}` }]);
+    Object.assign(result.message, { toolCallId: `t${i}`, toolName: "bash", isError: false });
+    compactedEntries.push(result);
+  }
+  compactedEntries.push(message("answer", "result23", "assistant", [{ type: "text", text:
+    "E2E compacted answer paragraph.\n\n".repeat(20)
+    + "## E2E compacted heading\n\n"
+    + "E2E compacted answer paragraph.\n\n".repeat(20),
+  }]));
+  writeSession(COMPACTED, compactedEntries);
 
   const probe = createServer();
   probe.listen(0, "127.0.0.1");
@@ -100,7 +144,7 @@ try {
     const response = await fetch(`${base}/api/sessions`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
     if (response?.ok) {
       const { sessions } = await response.json();
-      assert.deepEqual(sessions.map((session) => session.id).sort(), [LONG, BRANCH, RICH].sort());
+      assert.deepEqual(sessions.map((session) => session.id).sort(), [LONG, BRANCH, RICH, COMPACTED].sort());
       break;
     }
     assert.ok(Date.now() < deadline, "Server readiness timed out; see server.log");
@@ -125,6 +169,9 @@ try {
   assert.equal(beforeRoot.context.hasMore, false);
   await api("/api/sessions/e2e-does-not-exist", 404);
   await api("/api/files/..%2F..%2Fetc%2Fpasswd?type=read", 403);
+  const compacted = await api(`/api/sessions/${COMPACTED}`);
+  assert.equal(compacted.context.entryIds[0], "compact");
+  assert.equal(compacted.context.messages.some((entry) => entry.role === "user"), false);
   console.log("PASS: bounded history, branch context, pagination root, and API errors");
 
   browser = await chromium.launch();
@@ -190,16 +237,128 @@ try {
     await page.goto(`${base}/?session=${BRANCH}`, { waitUntil: "domcontentloaded" });
     await page.getByText("Active branch answer", { exact: true }).waitFor();
     assert.equal(await page.getByText("Inactive branch answer", { exact: true }).count(), 0);
+    const thinkingRequests = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.endsWith("/thinking")) thinkingRequests.push(request.url());
+    });
     await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
     await page.locator("strong").filter({ hasText: "E2E markdown" }).waitFor();
     await page.locator("pre").filter({ hasText: "console.log('E2E code');" }).waitFor();
     await page.getByText("E2E final answer", { exact: true }).waitFor();
-    await page.getByRole("button", { name: /process/i }).click();
+    const processDetails = page.getByRole("button", { name: /^Process details/ });
+    const thinking = page.getByRole("button", { name: /^Thinking/ });
+    assert.equal(await processDetails.count(), 1);
+    assert.equal(await thinking.count(), 0, "All thinking stays inside process details");
+    const finalMessage = page.locator("[data-entry-id='answer']");
+    assert.equal(await finalMessage.getByRole("button", { name: /^Thinking/ }).count(), 0);
+    assert.equal(await finalMessage.getByText("E2E Model", { exact: true }).count(), 1);
+    assert.equal(thinkingRequests.length, 0);
+    await processDetails.click();
+    assert.equal(await thinking.count(), 3);
+    assert.equal(await thinking.last().innerText(), "E2E final reasoning");
+    assert.equal(thinkingRequests.length, 0);
+    for (const [index, text] of ["Intermediate thinking details.", "Follow-up thinking details.", "Final thinking details."].entries()) {
+      await thinking.nth(index).click();
+      await page.getByText(text, { exact: false }).waitFor();
+    }
+    assert.equal(thinkingRequests.length, 3);
+    const processText = await processDetails.locator("..").innerText();
+    assert.ok(processText.indexOf("E2E intermediate reasoning") < processText.indexOf("echo E2E tool output"));
+    assert.ok(processText.indexOf("echo E2E tool output") < processText.indexOf("E2E follow-up reasoning"));
+    assert.ok(processText.indexOf("E2E follow-up reasoning") < processText.indexOf("E2E process note"));
+    assert.ok(processText.indexOf("E2E process note") < processText.indexOf("E2E final reasoning"));
+    assert.equal(processText.split("E2E final reasoning").length - 1, 1);
+    assert.ok(!(await finalMessage.last().innerText()).includes("E2E final reasoning"));
     await page.getByText("echo E2E tool output", { exact: true }).waitFor();
     await page.getByRole("button", { name: /bash.*echo E2E tool output/ }).click();
     await page.getByText("E2E tool output", { exact: true }).waitFor();
+    await page.goto(`${base}/?session=${COMPACTED}`, { waitUntil: "domcontentloaded" });
+    const heading = page.getByRole("heading", { name: "E2E compacted heading", exact: true });
+    await heading.waitFor({ state: "attached" });
+    if (viewport.width > 600) {
+      const node = page.locator("[data-minimap-node-index='0']");
+      await node.waitFor();
+      const rect = await node.boundingBox();
+      assert.ok(rect);
+      await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      const preview = page.locator("[data-minimap-preview-box]");
+      await preview.getByRole("button", { name: "E2E compaction anchor", exact: true }).waitFor();
+      await preview.getByRole("button", { name: "E2E compacted heading", exact: true }).click();
+      await page.waitForFunction(() => {
+        const heading = document.querySelector("[data-entry-id='answer'] h2");
+        const scroll = heading?.closest(".overflow-y-auto");
+        return heading && scroll && Math.abs(heading.getBoundingClientRect().top
+          - scroll.getBoundingClientRect().top - scroll.clientHeight * 0.3) < 5;
+      });
+      await page.screenshot({ path: join(artifacts, "compaction-minimap.png") });
+
+      const selectSession = async (title, entryId) => {
+        await page.locator(`[title="${title}"]`).click();
+        await page.locator(`[data-entry-id="${entryId}"]:not([data-message-role])`).waitFor({ state: "visible" });
+      };
+      const readingOffset = (target) => target.evaluate((element) => (
+        element.getBoundingClientRect().top - element.closest(".overflow-y-auto").getBoundingClientRect().top
+      ));
+      const positionForReading = async (target) => {
+        await target.evaluate((element) => {
+          const scroll = element.closest(".overflow-y-auto");
+          scroll.scrollTop += element.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 120;
+        });
+        return readingOffset(target);
+      };
+      await selectSession(text(0), "e4999");
+      const olderPage = page.waitForResponse((response) => response.url().includes(`/api/sessions/${LONG}/context?`));
+      await page.getByText("Scroll up to load earlier messages", { exact: true }).evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
+      await olderPage;
+      const olderMessage = page.locator("[data-entry-id='e4920']");
+      const olderOffset = await positionForReading(olderMessage);
+      await selectSession("Render **E2E markdown**", "user");
+      const process = page.getByRole("button", { name: /process details/i });
+      await process.click();
+      const answerHeading = page.getByRole("heading", { name: "E2E reading position", exact: true });
+      const answerOffset = await positionForReading(answerHeading);
+      await selectSession(text(0), "e4920");
+      assert.ok(Math.abs(await readingOffset(olderMessage) - olderOffset) < 5, "Returning to older history must restore its reading offset");
+      await selectSession("Render **E2E markdown**", "user");
+      assert.equal(await process.getAttribute("aria-expanded"), "false");
+      assert.ok(Math.abs(await readingOffset(answerHeading) - answerOffset) < 5, "Collapsing process details on remount must not displace the answer");
+
+      // Hold pagination until a different branch has loaded, exercising effect cancellation.
+      let releaseHistory;
+      const historyGate = new Promise((resolve) => { releaseHistory = resolve; });
+      const contextRoute = `**/api/sessions/${LONG}/context?*`;
+      await page.route(contextRoute, async (route) => {
+        if (new URL(route.request().url()).searchParams.has("before")) await historyGate;
+        await route.continue().catch(() => {});
+      });
+      // Context loading is real; avoid starting an agent just to persist the test branch.
+      const agentRoute = `**/api/agent/${LONG}`;
+      await page.route(agentRoute, (route) => route.fulfill({ json: {} }));
+      try {
+        const pendingHistory = page.waitForRequest((request) => request.url().includes(`/api/sessions/${LONG}/context?`) && new URL(request.url()).searchParams.has("before"));
+        await page.locator(`[title="${text(0)}"]`).click();
+        await pendingHistory;
+        await page.getByRole("button", { name: "Branches", exact: true }).click();
+        await page.getByText("E2E alternate history branch", { exact: true }).click();
+        await page.locator("[data-entry-id='alternate']:not([data-message-role])").waitFor({ state: "visible" });
+        await page.screenshot({ path: join(artifacts, "scroll-restore-branch.png") });
+      } finally {
+        releaseHistory();
+        await page.unroute(contextRoute);
+        await page.unroute(agentRoute);
+      }
+      console.log("PASS: session reading offsets, collapsed process details, and cancelled branch restoration");
+      await page.goto(`${base}/?session=${COMPACTED}`, { waitUntil: "domcontentloaded" });
+      await heading.waitFor({ state: "visible" });
+    }
+    await checkExtensionDialogs(page, artifacts, viewport.width);
+    if (viewport.width > 600) {
+      await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
+      await page.locator(".markdown-code-block pre").waitFor();
+      await checkChatAppearance(page);
+    }
     assert.deepEqual(errors, [], `Browser errors at width ${viewport.width}`);
-    console.log(`PASS: ${viewport.width}px browser pagination, branch, markdown, code, and tool call`);
+    console.log(`PASS: ${viewport.width}px browser pagination, branch, markdown, code, tool call, and compaction navigation`);
     await context.tracing.stop();
     await context.close();
     context = undefined;

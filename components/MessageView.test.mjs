@@ -10,6 +10,7 @@ const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const {
   MessageView,
+  ThinkingBlock,
   getTokenEstimateText,
   getToolCallInputText,
   replaceUserMessageText,
@@ -26,6 +27,47 @@ function renderMessage(message, props = {}) {
     ),
   );
 }
+
+test("updates a reused message when its written files change", () => {
+  const props = { message: { role: "assistant", content: [] } };
+  assert.equal(MessageView.compare(props, props), true);
+  assert.equal(MessageView.compare(props, { ...props, writtenFiles: [{ path: "/tmp/result.txt" }] }), false);
+});
+
+test("previews the first thinking line and reveals the full text with the saved default", () => {
+  const previousWindow = globalThis.window;
+  try {
+    for (const expanded of [false, true]) {
+      globalThis.window = { localStorage: { getItem: () => String(expanded) } };
+      const html = renderToStaticMarkup(React.createElement(
+        I18nProvider,
+        null,
+        React.createElement(ThinkingBlock, {
+          block: { type: "thinking", thinking: "**Independent reasoning**\n\nDetailed second line." },
+          blockIndex: 2,
+          duration: 3,
+        }),
+      ));
+      assert.match(html, new RegExp(`aria-expanded="${expanded}"`));
+      assert.equal((html.match(/>[^<]*Independent reasoning[^<]*</g) ?? []).length, 1);
+      assert.equal(html.includes("Detailed second line."), expanded);
+      assert.match(html, /aria-label="Thinking: /);
+      assert.match(html, /3s/);
+    }
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+});
+
+test("shows deferred thinking previews without loading the full content", () => {
+  const html = renderMessage({
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "Historical first line", deferred: true }],
+  });
+  assert.match(html, />Historical first line<\/span>/);
+  assert.match(html, /aria-expanded="false"/);
+});
 
 test("marks only the matched text block after splitting thinking and the final answer", () => {
   const message = {
@@ -163,6 +205,18 @@ test("renders partial assistant content before the provider error", () => {
 
   assert.match(html, /Partial response/);
   assert.match(html, /Error: Connection closed/);
+});
+
+test("marks persisted assistant messages with their source entry", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "openai",
+    model: "gpt-test",
+    content: [{ type: "text", text: "Select this response" }],
+  }, { entryId: "assistant-entry" });
+
+  assert.match(html, /data-message-role="assistant"/);
+  assert.match(html, /data-entry-id="assistant-entry"/);
 });
 
 test("renders a complete SDK skill expansion as a compact command", () => {

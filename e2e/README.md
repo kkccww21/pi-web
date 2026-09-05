@@ -29,9 +29,13 @@ Coverage:
   the chat. A small session checks pagination through the root.
 - Branch context follows the selected leaf and excludes the other branch.
 - Markdown, code blocks, and real tool-call/tool-result blocks render.
+- Chat width and font size persist, existing drafts resize, and short settings
+  panels keep every language option reachable on desktop and mobile.
 - Unknown sessions and paths outside the fixture project are rejected.
+- A local extension checks dialog keyboard navigation, Esc cancellation,
+  collapse/expand draft preservation, countdown display, and server-side expiry.
 
-Sending prompts, live streaming, and agent execution are outside this suite.
+Model prompts, live model streaming, and agent execution are outside this suite.
 Failures save a screenshot, Playwright trace, and server log under
 `test-results/e2e/`; CI uploads that directory. Open a trace with
 `npx playwright show-trace test-results/e2e/trace.zip`.
