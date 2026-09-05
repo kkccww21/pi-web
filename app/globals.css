@@ -1421,3 +1421,24 @@ span.token.table {
     font-size: 16px !important;
   }
 }
+
+/* Maximized file panel: cover the whole viewport so wide HTML/PDF previews
+   get the full window. Placed after the breakpoint blocks so it overrides
+   their width/positioning regardless of which layout is active. */
+.right-panel-container.right-panel-maximized {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  width: 100vw !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: var(--app-viewport-height, 100dvh);
+  border-left: none;
+  box-shadow: none;
+  transform: none;
+  transition: none;
+}
+.right-panel-container.right-panel-maximized > * {
+  width: 100% !important;
+  min-width: 0 !important;
+}

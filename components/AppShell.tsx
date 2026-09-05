@@ -138,6 +138,7 @@ export function AppShell() {
   const [projectTrustError, setProjectTrustError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [filePanelMaximized, setFilePanelMaximized] = useState(false);
   const [mobileToolbarMoreOpen, setMobileToolbarMoreOpen] = useState(false);
   const [mobileSidebarReady, setMobileSidebarReady] = useState(false);
   const sidebarWidthRef = useRef(SIDEBAR_DEFAULT_WIDTH);
@@ -198,6 +199,16 @@ export function AppShell() {
   useEffect(() => {
     if (isMobile) setSidebarOpen(false);
   }, [isMobile]);
+
+  // Escape exits the maximized file panel (full-window HTML/PDF preview).
+  useEffect(() => {
+    if (!filePanelMaximized) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) setFilePanelMaximized(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [filePanelMaximized]);
   useEffect(() => {
     setMobileSidebarReady(true);
   }, []);
@@ -2345,7 +2356,7 @@ export function AppShell() {
       <div
         ref={rightPanelResizer.panelRef}
         id="file-panel"
-        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelResizer.isResizing ? " right-panel-resizing" : ""}`}
+        className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}${rightPanelResizer.isResizing ? " right-panel-resizing" : ""}${rightPanelOpen && filePanelMaximized ? " right-panel-maximized" : ""}`}
         style={{
           "--right-panel-width": `${rightPanelResizer.width}px`,
           display: "flex",
@@ -2374,7 +2385,42 @@ export function AppShell() {
           </div>
           <button
             type="button"
-            onClick={() => setRightPanelOpen(false)}
+            onClick={() => setFilePanelMaximized((value) => !value)}
+            title={filePanelMaximized ? translate("files.restorePanel") : translate("files.maximizePanel")}
+            aria-label={filePanelMaximized ? translate("files.restorePanel") : translate("files.maximizePanel")}
+            aria-pressed={filePanelMaximized}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: TOP_BAR_ICON_BUTTON_SIZE, height: TOP_BAR_ICON_BUTTON_SIZE, padding: 0,
+              background: filePanelMaximized ? "var(--bg-selected)" : "transparent",
+              border: "none", borderLeft: "1px solid var(--border)",
+              color: "var(--text)", cursor: "pointer", flexShrink: 0, transition: "color 0.12s",
+            }}
+            onMouseEnter={(event) => { event.currentTarget.style.color = "var(--accent)"; }}
+            onMouseLeave={(event) => { event.currentTarget.style.color = "var(--text)"; }}
+          >
+            {filePanelMaximized ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="4 14 10 14 10 20" />
+                <polyline points="20 10 14 10 14 4" />
+                <line x1="14" y1="10" x2="21" y2="3" />
+                <line x1="3" y1="21" x2="10" y2="14" />
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="15 3 21 3 21 9" />
+                <polyline points="9 21 3 21 3 15" />
+                <line x1="21" y1="3" x2="14" y2="10" />
+                <line x1="3" y1="21" x2="10" y2="14" />
+              </svg>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setRightPanelOpen(false);
+              setFilePanelMaximized(false);
+            }}
             aria-controls="file-panel"
             aria-expanded={rightPanelOpen}
             title={translate("files.hidePanel")}

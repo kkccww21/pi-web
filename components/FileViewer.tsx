@@ -12,6 +12,7 @@ import ReactMarkdown from "react-markdown";
 import { useTheme } from "@/hooks/useTheme";
 import {
   DOCX_PREVIEW_MAX_BYTES,
+  TEXT_PREVIEW_MAX_BYTES,
   getFileExt,
   isAudioPath,
   isDocumentPreviewPath,
@@ -23,6 +24,7 @@ import { parseFrontmatter } from "@/lib/frontmatter";
 import { markdownPreviewRehypePlugins, markdownPreviewRemarkPlugins, normalizeDisplayMath } from "@/lib/markdown";
 import { CodeBlock, MermaidBlock } from "./MermaidBlock";
 import { FrontmatterCard } from "./FrontmatterCard";
+import { HtmlPreviewFrame } from "./HtmlPreviewFrame";
 import { parseUnifiedPatch } from "@/lib/patch";
 import type { GitFileDiffResponse } from "@/lib/git-types";
 import { useI18n } from "@/hooks/useI18n";
@@ -1048,7 +1050,7 @@ function TextFileViewer({
 
   const fetchContent = useCallback((filePath: string) => {
     const requestId = ++contentRequestRef.current;
-    return fetch(getFileApiUrl(filePath, "read", sourceSessionId))
+    const readContent = () => fetch(getFileApiUrl(filePath, "read", sourceSessionId))
       .then((r) => r.json())
       .then((d: FileData & { error?: string }) => {
         if (requestId !== contentRequestRef.current) return null;
@@ -1059,6 +1061,33 @@ function TextFileViewer({
         setError(null);
         setData(d);
         return d;
+      });
+    // HTML files over the 256KB read cap always 413 on type=read and the
+    // browser logs every rejected request, so check the size via meta first
+    // and hand oversized files straight to the streaming preview without
+    // firing a doomed read. Non-HTML files keep the direct read.
+    const ext = getFileExt(filePath);
+    if (ext !== "html" && ext !== "htm") {
+      return readContent().catch((e) => {
+        if (requestId !== contentRequestRef.current) return null;
+        setError(String(e));
+        return null;
+      });
+    }
+    return fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
+      .then((r) => r.json())
+      .then((meta: FileData & { error?: string }) => {
+        if (requestId !== contentRequestRef.current) return null;
+        if (meta.error) {
+          setError(meta.error);
+          return null;
+        }
+        if (typeof meta.size === "number" && meta.size > TEXT_PREVIEW_MAX_BYTES) {
+          setError(null);
+          setData({ content: "", language: "html", size: meta.size });
+          return meta;
+        }
+        return readContent();
       })
       .catch((e) => {
         if (requestId !== contentRequestRef.current) return null;
@@ -1112,6 +1141,32 @@ function TextFileViewer({
       active = false;
     };
   }, [filePath, fetchContent, sourceSessionId]);
+
+  // Oversized HTML fallback: "read" rejects text files over the 256KB preview
+  // cap with an error, but large generated HTML pages can still be streamed
+  // straight into the preview iframe by /api/file-preview. Confirm the file
+  // really is HTML via "meta" (no content needed) and swap the error view for
+  // a preview without pulling the bytes through the client. Any other error
+  // or non-HTML file leaves the original error untouched.
+  useEffect(() => {
+    if (!error) return;
+    let active = true;
+    fetch(getFileApiUrl(filePath, "meta", sourceSessionId))
+      .then((r) => r.json())
+      .then((meta: FileData & { error?: string }) => {
+        if (!active || meta?.error) return;
+        if (meta?.language === "html" && typeof meta.size === "number") {
+          setError(null);
+          setData({ content: "", language: "html", size: meta.size });
+        }
+      })
+      .catch(() => {
+        // Keep the original read error.
+      });
+    return () => {
+      active = false;
+    };
+  }, [error, filePath, sourceSessionId]);
 
   useEffect(() => {
     setWatching(false);
@@ -1430,6 +1485,14 @@ function TextFileViewer({
       >
         {effectiveDisplayMode === "diff" && hasGitDiff ? (
           <DiffView patch={gitDiff.patch!} />
+        ) : isHtml && !content && effectiveDisplayMode === "source" ? (
+          // Oversized HTML: the content was never fetched (streamed preview
+          // only), so source mode has nothing to show.
+          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 13 }}>
+            {t("i18n.fileTooLargeForSource")}
+          </div>
+        ) : isHtml && !content && effectiveDisplayMode === "preview" ? (
+          <HtmlPreviewFrame filePath={filePath} sourceSessionId={sourceSessionId} bust={data?.size} />
         ) : isHtml && effectiveDisplayMode === "preview" ? (
           <iframe
             srcDoc={content}
