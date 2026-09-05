@@ -7,9 +7,6 @@ import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
-import { SshTerminal } from "./SshTerminal";
-import { SshConnectDialog } from "./SshConnectDialog";
-import { destroySshSession } from "@/lib/ssh-terminal-client";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
 import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
 import { ProjectTrustDialog } from "./ProjectTrustDialog";
@@ -69,7 +66,6 @@ type AutoNameStatus =
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
 const LANGUAGE_MENU_WIDTH = 176;
 const AGENT_PANEL_WIDTH = 420;
-const TERMINAL_TAB_ID = "ssh-terminal";
 
 export function AppShell() {
   const router = useRouter();
@@ -436,12 +432,6 @@ export function AppShell() {
   // Right panel — file tabs only
   const [fileTabs, setFileTabs] = useState<Tab[]>([]);
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
-
-  // SSH terminal: machine-scoped, deliberately outside fileTabs so switching
-  // projects/sessions (which clears fileTabs) never kills the console.
-  const [terminalSession, setTerminalSession] = useState<{ sessionId: string; host: string; username: string } | null>(null);
-  const [terminalTabActive, setTerminalTabActive] = useState(false);
-  const [sshDialogOpen, setSshDialogOpen] = useState(false);
 
   const handleFileViewerStateChange = useCallback((
     tabId: string,
@@ -944,61 +934,6 @@ export function AppShell() {
     });
   }, [fileTabs]);
 
-  const handleTerminalButton = useCallback(() => {
-    setRightPanelOpen(true);
-    if (terminalSession) setTerminalTabActive(true);
-    else setSshDialogOpen(true);
-    if (isMobile) setSidebarOpen(false);
-  }, [terminalSession, isMobile]);
-
-  // Closing the terminal tab destroys the SSH session. The DELETE is issued
-  // here (not in an effect cleanup) so React StrictMode double-mounts and
-  // panel re-renders never kill a live session.
-  const handleCloseTerminal = useCallback(() => {
-    setTerminalSession((session) => {
-      if (session) void destroySshSession(session.sessionId);
-      return null;
-    });
-    setTerminalTabActive(false);
-    if (fileTabs.length === 0) setRightPanelOpen(false);
-    else setActiveFileTabId(fileTabs[fileTabs.length - 1].id);
-  }, [fileTabs]);
-
-  const handleSelectRightTab = useCallback((tabId: string) => {
-    if (tabId === TERMINAL_TAB_ID) {
-      setTerminalTabActive(true);
-      return;
-    }
-    setTerminalTabActive(false);
-    setActiveFileTabId(tabId);
-  }, []);
-
-  // A refresh or window close orphans the server-side SSH session (the DELETE
-  // from closing the tab never runs), so destroy it at unload time. `pagehide`
-  // fires on navigation away but not on tab switches; `persisted` excludes
-  // bfcache puts, where the page may resume later. The ref avoids re-binding.
-  const terminalSessionIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    terminalSessionIdRef.current = terminalSession?.sessionId ?? null;
-  }, [terminalSession]);
-  useEffect(() => {
-    const handlePageHide = (event: PageTransitionEvent) => {
-      if (event.persisted) return;
-      const id = terminalSessionIdRef.current;
-      if (id) void destroySshSession(id);
-    };
-    window.addEventListener("pagehide", handlePageHide);
-    return () => window.removeEventListener("pagehide", handlePageHide);
-  }, []);
-
-  const handleCloseRightTab = useCallback((tabId: string) => {
-    if (tabId === TERMINAL_TAB_ID) {
-      handleCloseTerminal();
-      return;
-    }
-    handleCloseFileTab(tabId);
-  }, [handleCloseTerminal, handleCloseFileTab]);
-
   const handleViewFullHistory = useCallback(() => {
     if (!selectedSession) return;
     window.open(
@@ -1132,32 +1067,6 @@ export function AppShell() {
             </button>
           );
         })}
-        <button
-          type="button"
-          onClick={handleTerminalButton}
-          title={translate("terminal.title")}
-          aria-label={translate("terminal.title")}
-          aria-pressed={Boolean(terminalSession) && terminalTabActive}
-          style={{
-            flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-            height: 32, padding: 0,
-            background: terminalSession && terminalTabActive ? "var(--bg-selected)" : "none",
-            border: "none",
-            borderRadius: 9, color: "var(--text-muted)", cursor: "pointer",
-            fontSize: 12, transition: "background 0.12s, color 0.12s",
-          }}
-          onMouseEnter={(event) => { event.currentTarget.style.background = "var(--bg-hover)"; event.currentTarget.style.color = "var(--text)"; }}
-          onMouseLeave={(event) => {
-            event.currentTarget.style.background = terminalSession && terminalTabActive ? "var(--bg-selected)" : "none";
-            event.currentTarget.style.color = "var(--text-muted)";
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <polyline points="4 17 10 11 4 5" />
-            <line x1="12" y1="19" x2="20" y2="19" />
-          </svg>
-          <span>{translate("terminal.title")}</span>
-        </button>
         <button
           type="button"
           onClick={() => setSettingsSection(getLastSettingsSection(projectTrustCwd))}
@@ -2484,17 +2393,10 @@ export function AppShell() {
         }}>
           <div style={{ flex: 1, overflow: "hidden" }}>
             <TabBar
-              tabs={terminalSession
-                ? [...fileTabs, {
-                    id: TERMINAL_TAB_ID,
-                    label: translate("terminal.title"),
-                    filePath: "",
-                    icon: "terminal" as const,
-                  }]
-                : fileTabs}
-              activeTabId={terminalTabActive && terminalSession ? TERMINAL_TAB_ID : (activeFileTabId ?? "")}
-              onSelectTab={handleSelectRightTab}
-              onCloseTab={handleCloseRightTab}
+              tabs={fileTabs}
+              activeTabId={activeFileTabId ?? ""}
+              onSelectTab={setActiveFileTabId}
+              onCloseTab={handleCloseFileTab}
             />
           </div>
           <button
@@ -2556,12 +2458,7 @@ export function AppShell() {
 
         {/* Only the active viewer is mounted. Lightweight per-tab state is restored on activation. */}
         <div style={{ flex: 1, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {terminalTabActive && terminalSession ? (
-            <SshTerminal
-              key={terminalSession.sessionId}
-              sessionId={terminalSession.sessionId}
-            />
-          ) : activeFileTab?.filePath ? (
+          {activeFileTab?.filePath ? (
             <FileViewer
               key={`${activeFileTab.id}:${activeFileTab.viewerRevision ?? 0}`}
               filePath={activeFileTab.filePath}
@@ -2602,19 +2499,6 @@ export function AppShell() {
           setModelsRefreshKey((key) => key + 1);
         }}
         onSessionReloaded={() => setSessionKey((key) => key + 1)}
-      />
-    )}
-    {sshDialogOpen && (
-      <SshConnectDialog
-        open={sshDialogOpen}
-        onConnected={(session) => {
-          setTerminalSession({ sessionId: session.id, host: session.host, username: session.username });
-          setTerminalTabActive(true);
-          setRightPanelOpen(true);
-          setSshDialogOpen(false);
-          if (isMobile) setSidebarOpen(false);
-        }}
-        onClose={() => setSshDialogOpen(false)}
       />
     )}
     {projectTrustDialogOpen && projectTrustCwd && (

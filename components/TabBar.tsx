@@ -13,8 +13,6 @@ export interface Tab {
   initialDisplayMode?: FileViewerDisplayMode;
   viewerState?: FileViewerState;
   viewerRevision?: number;
-  /** Non-file tabs (e.g. the SSH terminal) render a dedicated glyph. */
-  icon?: "terminal";
 }
 
 interface Props {
@@ -75,12 +73,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab }: Props) {
             }}
           >
             <span style={{ flexShrink: 0, opacity: isActive ? 1 : 0.7, display: "flex", alignItems: "center" }}>
-              {tab.icon === "terminal" ? (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <polyline points="4 17 10 11 4 5" />
-                  <line x1="12" y1="19" x2="20" y2="19" />
-                </svg>
-              ) : getFileIcon(tab.label, 13)}
+              {getFileIcon(tab.label, 13)}
             </span>
             <span
               style={{
