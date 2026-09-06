@@ -479,6 +479,7 @@ export const zhCNLocale: LocalePlugin = {
     "i18n.enableWrap": "启用自动换行",
     "i18n.htmlPreview": "HTML 预览",
     "i18n.fileTooLargeForSource": "文件过大，无法查看源码",
+    "i18n.refreshPreview": "重新加载预览",
     "i18n.previewFile": "预览 {file}",
     "i18n.invalidMermaid": "Mermaid 图表无效",
     "i18n.renderingMermaid": "正在渲染 Mermaid 图表",

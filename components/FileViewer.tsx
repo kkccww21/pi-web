@@ -1148,6 +1148,10 @@ function TextFileViewer({
   const [displayMode, setDisplayMode] = useState<DisplayMode>(requestedInitialDisplayMode);
   const [wrapLines, setWrapLines] = useState(initialWrapLines);
   const [watching, setWatching] = useState(false);
+  // Manual refresh counter for preview modes: bumped to force the oversized-HTML
+  // iframe URL (and any cached preview) to reload even when the file size is
+  // unchanged. Fork-local addition, kept out of upstream's data flow.
+  const [previewBust, setPreviewBust] = useState(0);
   const esRef = useRef<EventSource | null>(null);
   const contentRequestRef = useRef(0);
   const gitDiffRequestRef = useRef(0);
@@ -1254,6 +1258,14 @@ function TextFileViewer({
         return null;
       });
   }, [sourceSessionId]);
+
+  // Fork-local: manual preview refresh. Re-fetches content in place (display
+  // mode, scroll position and the watch SSE stay untouched) and bumps the
+  // preview bust so oversized-HTML iframes reload even when the size is equal.
+  const handleRefreshPreview = useCallback(() => {
+    setPreviewBust((current) => current + 1);
+    fetchContent(filePath);
+  }, [fetchContent, filePath]);
 
   const fetchGitDiff = useCallback(async (targetPath: string) => {
     const requestId = ++gitDiffRequestRef.current;
@@ -1679,6 +1691,20 @@ function TextFileViewer({
                 <MentionIcon />
               </button>
             )}
+            {effectiveDisplayMode === "preview" && hasPreview && (
+              <button
+                type="button"
+                onClick={handleRefreshPreview}
+                title={t("i18n.refreshPreview")}
+                aria-label={t("i18n.refreshPreview")}
+                className="file-viewer-icon-button"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                  <polyline points="21 3 21 9 15 9" />
+                </svg>
+              </button>
+            )}
             {effectiveDisplayMode === "source" && (
               <>
                 <button
@@ -1727,7 +1753,7 @@ function TextFileViewer({
             {t("i18n.fileTooLargeForSource")}
           </div>
         ) : isHtml && !content && effectiveDisplayMode === "preview" ? (
-          <HtmlPreviewFrame filePath={filePath} sourceSessionId={sourceSessionId} bust={data?.size} />
+          <HtmlPreviewFrame filePath={filePath} sourceSessionId={sourceSessionId} bust={(data?.size ?? 0) + previewBust} />
         ) : isHtml && effectiveDisplayMode === "preview" ? (
           <iframe
             srcDoc={content}

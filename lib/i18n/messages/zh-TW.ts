@@ -479,6 +479,7 @@ export const zhTWLocale: LocalePlugin = {
     "i18n.enableWrap": "啟用自動換行",
     "i18n.htmlPreview": "HTML 預覽",
     "i18n.fileTooLargeForSource": "檔案過大，無法檢視原始碼",
+    "i18n.refreshPreview": "重新載入預覽",
     "i18n.previewFile": "預覽 {file}",
     "i18n.invalidMermaid": "Mermaid 圖表無效",
     "i18n.renderingMermaid": "正在繪製 Mermaid 圖表",
