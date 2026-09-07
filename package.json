@@ -32,7 +32,7 @@
     "dev": "next dev -H 127.0.0.1 -p 30141",
     "dev:lan": "next dev -H 0.0.0.0 -p 30141",
     "build": "NODE_OPTIONS=--max-old-space-size=1536 next build",
-    "start": "cross-env PI_WEB_HOSTNAME=pirack.intf.kdns.fr PI_WEB_PASSWORD=kkccww next start -H 127.0.0.1 -p 30141",
+    "start": "cross-env PI_WEB_HOSTNAME=mon.intf.kdns.fr PI_WEB_PASSWORD=mon next start -H 127.0.0.1 -p 30141",
     "start:lan": "next start -H 0.0.0.0 -p 30141",
     "lint": "eslint .",
     "test:terminal": "node e2e/terminal.mjs",
