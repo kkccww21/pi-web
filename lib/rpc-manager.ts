@@ -3,7 +3,8 @@ import { createAgentSessionFromServices, createAgentSessionServices, getAgentDir
 import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, realpathSync, writeFileSync } from "fs";
-import { resolve } from "path";
+import { join, resolve } from "path";
+import { sanitizeAgentMessages, sanitizeSessionFile } from "./session-sanitizer";
 import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { resolveVisibleModels, selectInitialModelScope } from "./model-scope";
@@ -608,6 +609,27 @@ export class AgentSessionWrapper {
           };
 
           this.pendingPromptCount += 1;
+          // Providers that stream empty tool-call ids/names poison the live
+          // transcript (and the persisted file) so that strict OpenAI-format
+          // upstreams reject every retry with 400. Heal both before the next
+          // request so the session can retry itself without a reload.
+          const transcriptRepairs = sanitizeAgentMessages(
+            this.inner.agent.state?.messages ?? [],
+          );
+          if (transcriptRepairs > 0) {
+            const fileRepair = this.sessionFile
+              ? sanitizeSessionFile(
+                  this.sessionFile,
+                  join(getAgentDir(), "session-repair-backups"),
+                )
+              : { changed: false, repairs: 0 };
+            console.log(
+              `[pi-web] repaired ${transcriptRepairs} empty tool-call field(s) in ` +
+                `session ${this.sessionId} before prompt (file: ${
+                  fileRepair.changed ? `repaired ${fileRepair.repairs}` : "not persisted yet"
+                })`,
+            );
+          }
           let prompt: Promise<void>;
           try {
             prompt = this.inner.prompt(command.message as string, {
@@ -1943,6 +1965,18 @@ export async function startRpcSession(
 
   let sessionManager: SessionManager;
   if (sessionFile) {
+    // A history poisoned by a provider empty tool-call (toolResult with an
+    // empty toolCallId) makes every prompt 400 at the upstream. Repair the
+    // file transparently before the SDK loads it.
+    const fileRepair = sanitizeSessionFile(
+      sessionFile,
+      join(getAgentDir(), "session-repair-backups"),
+    );
+    if (fileRepair.changed) {
+      console.log(
+        `[pi-web] repaired ${fileRepair.repairs} empty tool-call field(s) in ${sessionFile} before loading`,
+      );
+    }
     sessionManager = SessionManager.open(sessionFile, undefined);
   } else {
     if (!cwd) throw new Error("cwd is required for a new session");

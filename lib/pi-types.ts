@@ -146,6 +146,7 @@ export interface AgentSessionLike {
       systemPrompt?: string;
       thinkingLevel?: string;
       streamingMessage?: PiAgentMessage;
+      messages?: PiAgentMessage[];
     };
     prepareNextTurnWithContext?: (
       context: PrepareNextTurnContext,

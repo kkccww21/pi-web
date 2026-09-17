@@ -127,6 +127,9 @@ hooks/
 - `globalThis` survives Next.js hot-reload; plain module-level Map does not
 - Idle timeout: 10 minutes. Concurrent `startRpcSession()` calls share a single start Promise (`globalThis.__piStartLocks`)
 
+### Empty tool-call repair (`lib/session-sanitizer.ts`)
+Some OpenAI-compatible upstreams stream assistant tool calls with empty `id`/`name`. pi records the resulting "Tool not found" result with an empty `toolCallId`, after which every request containing that history is rejected with 400 (`missing field tool_call_id`) and the session can never be retried. `sanitizeAgentMessages()` restores the "tool-call ids are never empty" invariant in place: synthetic `call_piweb_*` ids, tool name inferred from the recorded arguments, results paired against calls in the assistant's source order. Two hooks: `startRpcSession()` repairs the session file before the SDK loads it, and the wrapper's prompt case repairs the in-memory `agent.state.messages` before every prompt, so a session poisoned mid-run heals itself on the next retry. Repaired files back up their original to `~/.pi/agent/session-repair-backups/`. Repair is idempotent; structural jsonl corruption (torn writes) is deliberately out of scope.
+
 ### Fork must destroy the wrapper immediately
 `AgentSession.fork()` **mutates the wrapper's inner state in-place** — after fork, `inner.sessionId` is the *new* session's id. If the wrapper stays alive in the registry under the old id, the next request gets the already-forked state and subsequent forks produce a corrupt `parentSession` chain.
 
