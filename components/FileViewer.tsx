@@ -56,6 +56,8 @@ interface FileData {
   content: string;
   language: string;
   size: number;
+  nextOffset: number;
+  truncated: boolean;
 }
 
 const SOURCE_HIGHLIGHT_MAX_LINES = 1_000;
@@ -1140,6 +1142,7 @@ function TextFileViewer({
   const [gitDiffLoading, setGitDiffLoading] = useState(false);
   const [gitDiffResolved, setGitDiffResolved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestedInitialDisplayMode = resolveInitialFileDisplayMode(initialState, initialDisplayMode);
   const initialWrapLines = initialState?.wrapLines ?? false;
@@ -1211,9 +1214,9 @@ function TextFileViewer({
     initialScrollLeft,
   ]);
 
-  const fetchContent = useCallback((filePath: string) => {
+  const fetchContent = useCallback((filePath: string, offset = 0) => {
     const requestId = ++contentRequestRef.current;
-    const readContent = () => fetch(getFileApiUrl(filePath, "read", sourceSessionId))
+    const readContent = () => fetch(getFileApiUrl(filePath, "read", sourceSessionId, { offset: offset || undefined }))
       .then((r) => r.json())
       .then((d: FileData & { error?: string }) => {
         if (requestId !== contentRequestRef.current) return null;
@@ -1222,13 +1225,16 @@ function TextFileViewer({
           return null;
         }
         setError(null);
-        setData(d);
+        setData((current) => offset && current
+          ? { ...d, content: current.content + d.content }
+          : d);
         return d;
       });
-    // HTML files over the 256KB read cap always 413 on type=read and the
-    // browser logs every rejected request, so check the size via meta first
-    // and hand oversized files straight to the streaming preview without
-    // firing a doomed read. Non-HTML files keep the direct read.
+    // Oversized HTML: the read API paginates in chunks (truncated/nextOffset),
+    // but large generated HTML pages are better served straight into the
+    // streaming preview iframe via /api/file-preview, so check the size via
+    // meta first and hand oversized files to the iframe without pulling the
+    // bytes through the client. Non-HTML files keep the chunked read.
     const ext = getFileExt(filePath);
     if (ext !== "html" && ext !== "htm") {
       return readContent().catch((e) => {
@@ -1247,7 +1253,7 @@ function TextFileViewer({
         }
         if (typeof meta.size === "number" && meta.size > TEXT_PREVIEW_MAX_BYTES) {
           setError(null);
-          setData({ content: "", language: "html", size: meta.size });
+          setData({ content: "", language: "html", size: meta.size, nextOffset: 0, truncated: false });
           return meta;
         }
         return readContent();
@@ -1313,11 +1319,11 @@ function TextFileViewer({
     };
   }, [filePath, fetchContent, sourceSessionId]);
 
-  // Oversized HTML fallback: "read" rejects text files over the 256KB preview
-  // cap with an error, but large generated HTML pages can still be streamed
-  // straight into the preview iframe by /api/file-preview. Confirm the file
-  // really is HTML via "meta" (no content needed) and swap the error view for
-  // a preview without pulling the bytes through the client. Any other error
+  // Defensive fallback: large generated HTML pages can be streamed straight
+  // into the preview iframe by /api/file-preview even when the chunked read
+  // fails. Confirm the file really is HTML via "meta" (no content needed)
+  // and swap the error view for a preview without pulling the bytes through
+  // the client. Any other error
   // or non-HTML file leaves the original error untouched.
   useEffect(() => {
     if (!error) return;
@@ -1328,7 +1334,7 @@ function TextFileViewer({
         if (!active || meta?.error) return;
         if (meta?.language === "html" && typeof meta.size === "number") {
           setError(null);
-          setData({ content: "", language: "html", size: meta.size });
+          setData({ content: "", language: "html", size: meta.size, nextOffset: 0, truncated: false });
         }
       })
       .catch(() => {
@@ -1389,12 +1395,13 @@ function TextFileViewer({
     // explicit mode hint always wins over this default.
     if (
       defaultPreviewEligibleRef.current
+      && !data?.truncated
       && (data?.language === "markdown" || data?.language === "html")
     ) {
       defaultPreviewEligibleRef.current = false;
       updateDisplayMode("preview");
     }
-  }, [data?.language, updateDisplayMode]);
+  }, [data?.language, data?.truncated, updateDisplayMode]);
 
   const hasGitDiff = gitDiff?.supported === true && typeof gitDiff.patch === "string";
   const isDeletedDiff = hasGitDiff && gitDiff.status === "deleted";
@@ -1427,7 +1434,7 @@ function TextFileViewer({
   const language = data?.language ?? "text";
   const isHtml = language === "html";
   const isMarkdown = language === "markdown";
-  const hasPreview = isHtml || isMarkdown;
+  const hasPreview = !data?.truncated && (isHtml || isMarkdown);
   const effectiveDisplayMode = isDeletedDiff ? "diff" : displayMode;
   const useLightweightSource = sourceLines.length > SOURCE_HIGHLIGHT_MAX_LINES
     && !(effectiveDisplayMode === "diff" && hasGitDiff)
@@ -1607,7 +1614,7 @@ function TextFileViewer({
     : `${language} · ${lines.length} lines · ${formatSize(data!.size)}`;
 
   return (
-    <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+    <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", position: "relative" }}>
       <div
         className="file-viewer-toolbar"
         style={{
@@ -1734,6 +1741,36 @@ function TextFileViewer({
         </div>
       </div>
 
+      {data?.truncated && (
+        <div
+          className="file-viewer-load-more"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            padding: "5px 8px",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            color: "var(--text-dim)",
+            fontSize: 11,
+          }}
+        >
+          <span>{formatSize(data.nextOffset)} / {formatSize(data.size)}</span>
+          <button
+            type="button"
+            className="file-viewer-mode-button"
+            disabled={loadingMore}
+            onClick={() => {
+              setLoadingMore(true);
+              void fetchContent(filePath, data.nextOffset).finally(() => setLoadingMore(false));
+            }}
+          >
+            {loadingMore ? t("i18n.loading") : t("i18n.loadMore")}
+          </button>
+        </div>
+      )}
+
       {/* Content area */}
       <div
         ref={contentRef}
@@ -1742,7 +1779,7 @@ function TextFileViewer({
           viewerStateRef.current.scrollTop = event.currentTarget.scrollTop;
           viewerStateRef.current.scrollLeft = event.currentTarget.scrollLeft;
         }}
-        style={{ flex: 1, overflow: "auto", background: "var(--bg)" }}
+        style={{ flex: 1, overflow: "auto", background: "var(--bg)", paddingBottom: data?.truncated ? 48 : undefined }}
       >
         {effectiveDisplayMode === "diff" && hasGitDiff ? (
           <DiffView patch={gitDiff.patch!} />
